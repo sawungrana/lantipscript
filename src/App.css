@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+/* 1. LOAD OFFLINE FONTS */
+@font-face {
+  font-family: 'DM Sans';
+  src: url('./assets/fonts/DMSans-Variable.ttf') format('truetype');
+  font-weight: 100 1000; /* Supports all variable weights */
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Instrument Serif';
+  src: url('./assets/fonts/InstrumentSerif-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Instrument Serif';
+  src: url('./assets/fonts/InstrumentSerif-Italic.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* 2. TAILWIND THEME CONFIG */
+@theme {
+  --color-lantip-dark: #555879;
+  --color-lantip-blue: #98A1BC;
+  --color-lantip-beige: #DED3C4;
+  --color-lantip-cream: #F4EBD3;
+
+  /* This tells Tailwind that whenever we use font-sans, use our local DM Sans */
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, serif;
+}
+
+/* ... keep the rest of your body, bento-card, and neo-btn CSS exactly as it was below here! */
+
+body {
+  /* We use the cream color as the canvas that the bento boxes float on */
+  background-color: var(--color-lantip-cream);
+  color: var(--color-lantip-dark);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+::selection {
+  background-color: var(--color-lantip-dark);
+  color: var(--color-lantip-cream);
+}
+
+/* Custom Scrollbar to fit the vibe */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-lantip-blue);
+  border-radius: 10px;
+}
+
+/* --- THE SOFT NEO-BRUTAL BENTO DESIGN SYSTEM --- */
+
+/* Main layout cards */
+.bento-card {
+  background-color: white;
+  border: 3px solid var(--color-lantip-dark);
+  border-radius: 1.5rem; /* Large rounded corners */
+  box-shadow: 4px 4px 0px var(--color-lantip-dark); /* Solid shadow */
+}
+
+/* Fun, clickable buttons */
+.neo-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.25rem;
+  font-weight: 700;
+  border: 3px solid var(--color-lantip-dark);
+  border-radius: 1rem;
+  transition: all 0.15s ease;
+  box-shadow: 3px 3px 0px var(--color-lantip-dark);
+}
+
+.neo-btn-primary { background-color: var(--color-lantip-dark); color: var(--color-lantip-cream); }
+.neo-btn-secondary { background-color: var(--color-lantip-beige); color: var(--color-lantip-dark); }
+
+/* The click "squish" effect */
+.neo-btn:active:not(:disabled) {
+  box-shadow: 0px 0px 0px var(--color-lantip-dark);
+  transform: translate(3px, 3px);
+}
+
+.neo-btn:disabled {
+  opacity: 0.6;
+  box-shadow: 0px 0px 0px var(--color-lantip-dark);
+  transform: translate(3px, 3px);
+  cursor: not-allowed;
+}
+
+/* The active transcription paragraph */
+.neo-segment-active {
+  background-color: var(--color-lantip-cream);
+  border: 3px solid var(--color-lantip-dark);
+  border-radius: 1rem;
+  box-shadow: 4px 4px 0px var(--color-lantip-dark);
+  transform: scale(1.02);
+  transition: all 0.2s ease;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* --- MICRO-ANIMATIONS --- */
+
+/* Cascading slide-up for text paragraphs */
+@keyframes slideUpFade {
+  from {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  opacity: 0; /* Start hidden */
+  animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Subtle pulse for the empty state logo */
+@keyframes subtleFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.animate-float {
+  animation: subtleFloat 4s ease-in-out infinite;
+}
+
+/* Drag overlay fade-in */
+.drag-overlay {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+@keyframes fadeIn {
+  from { opacity: 0; backdrop-filter: blur(0px); }
+  to { opacity: 1; backdrop-filter: blur(4px); }
+}
