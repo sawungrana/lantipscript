@@ -1,0 +1,50 @@
+name: Build Windows App
+
+on:
+  workflow_dispatch: # This allows you to trigger the build manually by clicking a button!
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Download Sidecars & Models
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "src-tauri/bin"
+          New-Item -ItemType Directory -Force -Path "src-tauri/resources"
+
+          Write-Host "Downloading Whisper Model..."
+          Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" -OutFile "src-tauri/resources/ggml-small.bin"
+
+          Write-Host "Downloading FFmpeg for Windows..."
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "."
+          Move-Item -Path "ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" -Destination "src-tauri\bin\ffmpeg-x86_64-pc-windows-msvc.exe"
+
+      - name: Build Tauri App
+        run: npm run tauri build
+
+      - name: Upload Windows Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: LantipScript-Windows-Installer
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
