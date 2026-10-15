@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Local SKU build artifacts (mirrors the CI artifacts/ folder)
+artifacts/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

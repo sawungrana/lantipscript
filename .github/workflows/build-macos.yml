@@ -24,17 +24,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Download Sidecars & Models
+      - name: Download FFmpeg sidecar
         run: |
-          mkdir -p src-tauri/bin src-tauri/resources
-
-          echo "Downloading Whisper model (large-v3-turbo-q5_0)..."
-          curl -L --retry 5 --retry-all-errors --retry-delay 5 \
-            -o src-tauri/resources/ggml-large-v3-turbo-q5_0.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
-
-          echo "Verifying Whisper model checksum..."
-          echo "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2  src-tauri/resources/ggml-large-v3-turbo-q5_0.bin" | shasum -a 256 -c -
+          mkdir -p src-tauri/bin
 
           echo "Downloading FFmpeg for macOS (arm64, osxexperts build)..."
           curl -L -o ffmpeg.zip "https://www.osxexperts.net/ffmpeg81arm.zip"
@@ -44,12 +36,59 @@ jobs:
           mv ffmpeg src-tauri/bin/ffmpeg-aarch64-apple-darwin
           chmod +x src-tauri/bin/ffmpeg-aarch64-apple-darwin
 
-      - name: Build Tauri App (Metal)
-        run: npm run tauri build -- --features metal
+      # Compile once; the per-SKU step below only re-runs the bundler.
+      - name: Build Tauri App (Metal, no bundle)
+        run: npm run tauri build -- --no-bundle --features metal
 
-      - name: Upload macOS Installer
+      # One bundle per SKU (Full/Lite/Express), each with exactly one model in
+      # resources/. The model is SHA-256 verified and the finished .app is
+      # checked to contain exactly the expected .bin.
+      - name: Build SKU Bundles (.dmg)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          mkdir -p artifacts
+          SKUS=(
+            "full ggml-large-v3-turbo-q5_0.bin 394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
+            "lite ggml-small-q5_1.bin ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"
+            "express ggml-tiny-q5_1.bin 818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7"
+          )
+          for entry in "${SKUS[@]}"; do
+            read -r sku model sha <<< "$entry"
+            echo "::group::Bundling $sku ($model)"
+
+            rm -f src-tauri/resources/*.bin
+            echo "Downloading Whisper model ($model)..."
+            curl -L --retry 5 --retry-all-errors --retry-delay 5 \
+              -o "src-tauri/resources/$model" \
+              "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$model"
+            echo "Verifying Whisper model checksum..."
+            echo "$sha  src-tauri/resources/$model" | shasum -a 256 -c -
+
+            # Rebuild the bundles from scratch so no stale model can linger.
+            # NOTE: `--bundles dmg` alone deletes the intermediate .app after the
+            # dmg is built; asking for `app dmg` keeps the .app so the bundled
+            # model can be verified right below.
+            rm -rf src-tauri/target/release/bundle/macos src-tauri/target/release/bundle/dmg
+            npm run tauri bundle -- --bundles app dmg --features metal
+
+            RESOURCES="src-tauri/target/release/bundle/macos/lantipscript.app/Contents/Resources/resources"
+            MODEL_COUNT=$(find "$RESOURCES" -name '*.bin' | wc -l | tr -d ' ')
+            if [ "$MODEL_COUNT" != "1" ]; then
+              echo "Expected exactly 1 model in the $sku bundle, found $MODEL_COUNT"; exit 1
+            fi
+            if [ ! -f "$RESOURCES/$model" ]; then
+              echo "The $sku bundle does not contain the expected model ($model)"; exit 1
+            fi
+
+            cp src-tauri/target/release/bundle/dmg/*.dmg "artifacts/lantipscript_${VERSION}_aarch64_${sku}.dmg"
+            echo "::endgroup::"
+          done
+
+      - name: Upload macOS Installers
         uses: actions/upload-artifact@v4
         with:
-          name: LantipScript-macOS-Installer
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          name: LantipScript-macOS-Installers
+          path: artifacts/*.dmg
           if-no-files-found: error

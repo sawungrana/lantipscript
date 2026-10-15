@@ -39,34 +39,86 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Download Sidecars & Models
+      - name: Download FFmpeg sidecar
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "src-tauri/bin"
-          New-Item -ItemType Directory -Force -Path "src-tauri/resources"
-
-          Write-Host "Downloading Whisper model (large-v3-turbo-q5_0)..."
-          Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" -OutFile "src-tauri/resources/ggml-large-v3-turbo-q5_0.bin"
-
-          Write-Host "Verifying Whisper model checksum..."
-          $modelHash = (Get-FileHash "src-tauri/resources/ggml-large-v3-turbo-q5_0.bin" -Algorithm SHA256).Hash.ToLower()
-          if ($modelHash -ne "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2") {
-            throw "Whisper model SHA-256 mismatch (got $modelHash). Aborting."
-          }
 
           Write-Host "Downloading FFmpeg for Windows..."
           Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "."
           Move-Item -Path "ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" -Destination "src-tauri\bin\ffmpeg-x86_64-pc-windows-msvc.exe"
 
-      - name: Build Tauri App (Vulkan)
-        run: npm run tauri build -- --features vulkan
+      # Compile once; the per-SKU step below only re-runs the bundler.
+      - name: Build Tauri App (Vulkan, no bundle)
+        run: npm run tauri build -- --no-bundle --features vulkan
 
-      - name: Upload Windows Installer
+      # One NSIS bundle per SKU (Full/Lite/Express), each with exactly one model
+      # in resources/. The model is SHA-256 verified before bundling and, when
+      # 7-Zip is available, the finished installer is checked to embed exactly
+      # that model's .bin.
+      - name: Build SKU Bundles (NSIS)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
+
+          $skus = @(
+            @{ sku = "full";    model = "ggml-large-v3-turbo-q5_0.bin"; sha = "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2" },
+            @{ sku = "lite";    model = "ggml-small-q5_1.bin";         sha = "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb" },
+            @{ sku = "express"; model = "ggml-tiny-q5_1.bin";          sha = "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7" }
+          )
+
+          foreach ($item in $skus) {
+            Write-Host "Bundling $($item.sku) ($($item.model))..."
+
+            Remove-Item -Force "src-tauri/resources/*.bin" -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force "C:/t/release/bundle/nsis" -ErrorAction SilentlyContinue
+
+            Write-Host "Downloading Whisper model ($($item.model))..."
+            Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$($item.model)" -OutFile "src-tauri/resources/$($item.model)"
+
+            Write-Host "Verifying Whisper model checksum..."
+            $modelHash = (Get-FileHash "src-tauri/resources/$($item.model)" -Algorithm SHA256).Hash.ToLower()
+            if ($modelHash -ne $item.sha) {
+              throw "Whisper model SHA-256 mismatch for $($item.model) (got $modelHash). Aborting."
+            }
+
+            $bins = @(Get-ChildItem "src-tauri/resources" -Filter "*.bin")
+            if ($bins.Count -ne 1) {
+              throw "Expected exactly 1 model in resources/, found $($bins.Count)"
+            }
+
+            npm run tauri bundle -- --bundles nsis --features vulkan
+            if ($LASTEXITCODE -ne 0) { throw "tauri bundle failed for $($item.sku)" }
+
+            $installer = Get-ChildItem "C:/t/release/bundle/nsis/*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $installer) { throw "NSIS installer not found for $($item.sku)" }
+
+            # Best-effort verification that the installer embeds only this SKU's model.
+            $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+            if (Test-Path $sevenZip) {
+              $listing = & $sevenZip l $installer.FullName 2>&1 | Out-String
+              if ($LASTEXITCODE -eq 0) {
+                $binMatches = ([regex]::Matches($listing, "\.bin")).Count
+                if ($binMatches -ne 1) {
+                  throw "Expected exactly 1 .bin inside the $($item.sku) installer, found $binMatches"
+                }
+                if ($listing -notmatch [regex]::Escape($item.model)) {
+                  throw "The $($item.sku) installer does not contain the expected model ($($item.model))"
+                }
+              } else {
+                Write-Host "7-Zip could not list the installer; skipping embedded-model check."
+              }
+            }
+
+            Copy-Item $installer.FullName "artifacts/lantipscript_${version}_x64_$($item.sku)-setup.exe"
+          }
+
+      - name: Upload Windows Installers
         uses: actions/upload-artifact@v4
         with:
-          name: LantipScript-Windows-Installer
-          path: |
-            C:/t/release/bundle/nsis/*.exe
-            C:/t/release/bundle/msi/*.msi
+          name: LantipScript-Windows-Installers
+          path: artifacts/*.exe
           if-no-files-found: error
