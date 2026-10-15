@@ -285,3 +285,33 @@ Append-only log of decisions, changes, and handover notes for LantipScript.
   will be rebuilt after Phase 4.
 - Runtime check on the Windows 5800U laptop still pending (Vulkan vs CPU speed) — the
   engine popover now makes the active backend visible there.
+
+---
+
+## 2026-10-15 — Phase 4 complete (UX + precision; `main`)
+
+Note: macOS CI run 38767813523 went green (6m22s) after the deployment-target fix;
+`LantipScript-macOS-Installer` (535 MB) uploaded.
+
+### Done
+
+- `TranscriptRow` extracted to module level and wrapped in `React.memo`;
+  `updateSegmentText` rewritten as an immutable functional update
+  (`prev.map(...)`) behind `useCallback`, so playback re-renders don't touch static
+  rows and editing re-renders only that row.
+- `timeupdate` -> state throttled to ~10 fps (100 ms); `seeking` flushes immediately so
+  the highlight stays accurate while scrubbing.
+- Auto-scroll during playback to the active segment, **only when out of view** (24 px
+  margin, smooth, centered) — avoids fighting manual scrolling.
+- `handleExport` catch -> inline error card; the invalid-file `alert` also moved to the
+  error card. No `alert` left in the app.
+- `tauri.conf.json` window: `minWidth: 560`, `minHeight: 560`.
+- SRT/VTT export: skipped (backlog).
+- Verified: `npx tsc --noEmit` and `npm run build` pass.
+
+### Still open / notes
+
+- Manual macOS checklist pending (user): Metal dot green, progress + cancel,
+  auto-scroll, edit + export, invalid-file card, Force CPU round-trip.
+- Windows runtime check on the 5800U laptop deferred by user; final artifacts for both
+  platforms re-dispatched after this commit.

@@ -1,6 +1,6 @@
 # LantipScript — Improvement Plan
 
-- **Status:** Approved 2026-10-15 · Phases 0–3 complete · Phase 4 next
+- **Status:** Approved 2026-10-15 · Phases 0–4 complete · awaiting manual mac checks + Windows runtime check
 - **Date:** 2026-10-15
 - **Owner:** sawungrana
 
@@ -165,13 +165,21 @@ Done:
   (`'path' is unavailable: introduced in macOS 10.15`). Root cause of the first
   failed macOS CI run.
 
-### Phase 4 — UX + precision
-- Memoize transcript rows (`React.memo`, pass only `isActive`) and/or throttle
-  `timeupdate` state updates to ~10 fps.
-- Auto-scroll the active segment into view during playback.
-- Surface export failures with an alert instead of silent console error.
-- Window `minWidth`/`minHeight` in `tauri.conf.json`.
-- Optional: SRT/VTT export.
+### Phase 4 — UX + precision (complete)
+Done:
+- Transcript rows extracted into a module-level `TranscriptRow` wrapped in `React.memo`
+  (props: `segment`, `index`, `isActive`, stable `useCallback` handlers);
+  `updateSegmentText` now updates state immutably so only the edited row re-renders.
+- `timeupdate` -> state throttled to ~10 fps (100 ms), plus an immediate flush on
+  `seeking` so the highlight is accurate while scrubbing.
+- Auto-scroll: during playback the active segment scrolls into view **only when out of
+  view** (24 px margin, smooth, centered) so manual scrolling isn't fought.
+- Export failures surface in the inline error card; the "invalid file type" `alert` also
+  moved to the error card (no `alert` left in the app).
+- Window `minWidth` / `minHeight` = 560 / 560 in `tauri.conf.json`.
+- SRT/VTT export: **skipped for now** (backlog) — user decision 2026-10-15.
+Verified: `npx tsc --noEmit` + `npm run build` pass. Manual macOS checklist for the
+user: Metal dot green, progress + cancel, auto-scroll, edit + export, invalid-file card.
 
 ## Verification
 

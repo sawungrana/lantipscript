@@ -1,5 +1,5 @@
 import './App.css';
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
@@ -26,6 +26,62 @@ interface EngineStatus {
 
 const GPU_SETTING_KEY = "lantipscript.gpuEnabled";
 
+const formatTime = (ms: number) => {
+  const totalMs = Math.max(0, Math.floor(ms));
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const millis = totalMs % 1000;
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
+};
+
+interface TranscriptRowProps {
+  segment: TranscriptSegment;
+  index: number;
+  isActive: boolean;
+  onSeek: (ms: number) => void;
+  onEdit: (index: number, text: string) => void;
+}
+
+// Memoized so the 10fps playback re-renders only touch rows whose isActive flips
+const TranscriptRow = memo(function TranscriptRow({ segment, index, isActive, onSeek, onEdit }: TranscriptRowProps) {
+  // Limit animation delay to max 2 seconds so the tail end doesn't take forever to appear
+  const cascadeDelay = Math.min(index * 0.05, 2);
+
+  return (
+    <div
+      data-segment-index={index}
+      // The 'animate-slide-up' CSS class is what creates the beautiful entrance
+      className={`animate-slide-up flex gap-4 p-4 transition-all duration-300 ${
+        isActive ? 'neo-segment-active' : 'border-[3px] border-transparent hover:border-lantip-beige/60 rounded-2xl'
+      }`}
+      style={{ animationDelay: `${cascadeDelay}s` }}
+    >
+      {/* Clickable Timestamp */}
+      <div 
+        onClick={() => onSeek(segment.start_ms)}
+        className={`w-20 flex-shrink-0 mt-1 text-sm font-bold font-sans tabular-nums whitespace-nowrap cursor-pointer transition-colors ${
+          isActive ? 'text-lantip-dark' : 'text-lantip-blue hover:text-lantip-dark'
+        }`}
+      >
+        {formatTime(segment.start_ms)}
+      </div>
+      
+      {/* Editable Transcript Text */}
+      <div 
+        contentEditable
+        suppressContentEditableWarning
+        onBlur={(e) => onEdit(index, e.currentTarget.textContent || "")}
+        className={`font-sans leading-relaxed text-[1.1rem] outline-none w-full transition-colors duration-300 ${
+          isActive ? 'text-lantip-dark font-semibold' : 'text-lantip-dark/90'
+        }`}
+      >
+        {segment.text}
+      </div>
+    </div>
+  );
+});
+
 export default function App() {
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
@@ -40,8 +96,10 @@ export default function App() {
   const [gpuEnabled, setGpuEnabled] = useState<boolean>(true);
 
   const waveformContainerRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const isTranscribingRef = useRef<boolean>(false); // Prevents duplicate drops
+  const lastTimeUpdateRef = useRef<number>(0); // Throttles timeupdate -> state
 
   // Initialize WaveSurfer
   useEffect(() => {
@@ -62,7 +120,15 @@ export default function App() {
 
     ws.on('play', () => setIsPlaying(true));
     ws.on('pause', () => setIsPlaying(false));
-    ws.on('timeupdate', (time) => setCurrentTime(time * 1000));
+    // Throttle to ~10 fps: the highlight only needs segment-level precision
+    ws.on('timeupdate', (time) => {
+      const now = performance.now();
+      if (now - lastTimeUpdateRef.current < 100) return;
+      lastTimeUpdateRef.current = now;
+      setCurrentTime(time * 1000);
+    });
+    // Keep the highlight accurate while scrubbing
+    ws.on('seeking', () => setCurrentTime(ws.getCurrentTime() * 1000));
 
     wavesurferRef.current = ws;
 
@@ -119,15 +185,6 @@ export default function App() {
     refreshEngineStatus();
   },[]);
 
-  const formatTime = (ms: number) => {
-    const totalMs = Math.max(0, Math.floor(ms));
-    const totalSeconds = Math.floor(totalMs / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    const millis = totalMs % 1000;
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
-  };
-
   // Reusable core processor for both button clicks and drag/drop
   async function processAudio(actualPath: string) {
     if (isTranscribingRef.current) return;
@@ -135,7 +192,7 @@ export default function App() {
     // Quick validation
     const isMedia = /\.(mp3|wav|m4a|mp4|mov)$/i.test(actualPath);
     if (!isMedia) {
-      alert("Please provide a valid audio or video file (mp3, wav, m4a, mp4, mov).");
+      setErrorMessage("Please provide a valid audio or video file (mp3, wav, m4a, mp4, mov).");
       return;
     }
 
@@ -221,24 +278,42 @@ export default function App() {
       if (!savePath) return;
       await writeTextFile(savePath, textContent);
     } catch (error) {
-      console.error(error);
+      setErrorMessage(`Export failed: ${String(error)}`);
     }
   }
 
   const togglePlayPause = () => wavesurferRef.current?.playPause();
   
-  const jumpToTime = (ms: number) => {
+  const jumpToTime = useCallback((ms: number) => {
     if (wavesurferRef.current) {
       wavesurferRef.current.setTime(ms / 1000);
       wavesurferRef.current.play();
     }
-  };
+  }, []);
 
-  const updateSegmentText = (index: number, newText: string) => {
-    const updated = [...segments];
-    updated[index].text = newText;
-    setSegments(updated);
-  };
+  const updateSegmentText = useCallback((index: number, newText: string) => {
+    setSegments((prev) => prev.map((seg, i) => (i === index ? { ...seg, text: newText } : seg)));
+  }, []);
+
+  const activeIndex = segments.findIndex(
+    (seg) => currentTime >= seg.start_ms && currentTime < seg.end_ms
+  );
+
+  // During playback, keep the active segment in view (without fighting manual scroll)
+  useEffect(() => {
+    if (!isPlaying || activeIndex < 0) return;
+    const container = mainRef.current;
+    const row = container?.querySelector<HTMLElement>(`[data-segment-index="${activeIndex}"]`);
+    if (!container || !row) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const margin = 24;
+    const outOfView = rowRect.top < containerRect.top + margin || rowRect.bottom > containerRect.bottom - margin;
+    if (outOfView) {
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [activeIndex, isPlaying]);
 
   return (
     <div className="flex flex-col h-screen bg-lantip-cream p-4 sm:p-5 gap-4 overflow-hidden font-sans relative">
@@ -342,7 +417,7 @@ export default function App() {
       </header>
 
       {/* 2. MAIN TRANSCRIPT AREA */}
-      <main className="bento-card flex-1 overflow-y-auto p-8 lg:px-24 scroll-smooth relative flex flex-col">
+      <main ref={mainRef} className="bento-card flex-1 overflow-y-auto p-8 lg:px-24 scroll-smooth relative flex flex-col">
 
         {/* Transcription error */}
         {errorMessage && (
@@ -391,45 +466,16 @@ export default function App() {
 
         {/* Transcription Bubbles with Staggered Cascading Animation */}
         <div className="max-w-3xl mx-auto space-y-4 pb-12 w-full mt-2">
-          {segments.map((seg, idx) => {
-            const isActive = currentTime >= seg.start_ms && currentTime < seg.end_ms;
-            
-            // Limit animation delay to max 2 seconds so the tail end doesn't take forever to appear
-            const cascadeDelay = Math.min(idx * 0.05, 2); 
-
-            return (
-              <div 
-                key={idx} 
-                // The 'animate-slide-up' CSS class is what creates the beautiful entrance
-                className={`animate-slide-up flex gap-4 p-4 transition-all duration-300 ${
-                  isActive ? 'neo-segment-active' : 'border-[3px] border-transparent hover:border-lantip-beige/60 rounded-2xl'
-                }`}
-                style={{ animationDelay: `${cascadeDelay}s` }}
-              >
-                {/* Clickable Timestamp */}
-                <div 
-                  onClick={() => jumpToTime(seg.start_ms)}
-                  className={`w-20 flex-shrink-0 mt-1 text-sm font-bold font-sans tabular-nums whitespace-nowrap cursor-pointer transition-colors ${
-                    isActive ? 'text-lantip-dark' : 'text-lantip-blue hover:text-lantip-dark'
-                  }`}
-                >
-                  {formatTime(seg.start_ms)}
-                </div>
-                
-                {/* Editable Transcript Text */}
-                <div 
-                  contentEditable
-                  suppressContentEditableWarning
-                  onBlur={(e) => updateSegmentText(idx, e.currentTarget.textContent || "")}
-                  className={`font-sans leading-relaxed text-[1.1rem] outline-none w-full transition-colors duration-300 ${
-                    isActive ? 'text-lantip-dark font-semibold' : 'text-lantip-dark/90'
-                  }`}
-                >
-                  {seg.text}
-                </div>
-              </div>
-            );
-          })}
+          {segments.map((seg, idx) => (
+            <TranscriptRow
+              key={idx}
+              segment={seg}
+              index={idx}
+              isActive={idx === activeIndex}
+              onSeek={jumpToTime}
+              onEdit={updateSegmentText}
+            />
+          ))}
         </div>
       </main>
 
