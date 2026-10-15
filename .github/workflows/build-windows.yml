@@ -3,6 +3,13 @@ name: Build Windows App
 on:
   workflow_dispatch: # This allows you to trigger the build manually by clicking a button!
 
+env:
+  # Pinned LunarG Vulkan SDK version used to build whisper.cpp's Vulkan backend.
+  VULKAN_VERSION: "1.4.357.0"
+  # Short target dir: whisper-rs-sys CMake builds fail on long paths inside deep
+  # default target dirs on Windows.
+  CARGO_TARGET_DIR: 'C:\t'
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -21,6 +28,14 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          curl.exe -o $env:RUNNER_TEMP\VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+
       - name: Install frontend dependencies
         run: npm install
 
@@ -30,21 +45,28 @@ jobs:
           New-Item -ItemType Directory -Force -Path "src-tauri/bin"
           New-Item -ItemType Directory -Force -Path "src-tauri/resources"
 
-          Write-Host "Downloading Whisper Model..."
-          Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" -OutFile "src-tauri/resources/ggml-small.bin"
+          Write-Host "Downloading Whisper model (large-v3-turbo-q5_0)..."
+          Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" -OutFile "src-tauri/resources/ggml-large-v3-turbo-q5_0.bin"
+
+          Write-Host "Verifying Whisper model checksum..."
+          $modelHash = (Get-FileHash "src-tauri/resources/ggml-large-v3-turbo-q5_0.bin" -Algorithm SHA256).Hash.ToLower()
+          if ($modelHash -ne "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2") {
+            throw "Whisper model SHA-256 mismatch (got $modelHash). Aborting."
+          }
 
           Write-Host "Downloading FFmpeg for Windows..."
           Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "."
           Move-Item -Path "ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" -Destination "src-tauri\bin\ffmpeg-x86_64-pc-windows-msvc.exe"
 
-      - name: Build Tauri App
-        run: npm run tauri build
+      - name: Build Tauri App (Vulkan)
+        run: npm run tauri build -- --features vulkan
 
       - name: Upload Windows Installer
         uses: actions/upload-artifact@v4
         with:
           name: LantipScript-Windows-Installer
           path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
+            C:/t/release/bundle/nsis/*.exe
+            C:/t/release/bundle/msi/*.msi
+          if-no-files-found: error

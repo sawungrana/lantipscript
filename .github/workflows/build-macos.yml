@@ -1,0 +1,55 @@
+name: Build macOS App
+
+on:
+  workflow_dispatch: # This allows you to trigger the build manually by clicking a button!
+
+jobs:
+  build-macos:
+    runs-on: macos-15 # Apple Silicon (arm64)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Download Sidecars & Models
+        run: |
+          mkdir -p src-tauri/bin src-tauri/resources
+
+          echo "Downloading Whisper model (large-v3-turbo-q5_0)..."
+          curl -L --retry 5 --retry-all-errors --retry-delay 5 \
+            -o src-tauri/resources/ggml-large-v3-turbo-q5_0.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+
+          echo "Verifying Whisper model checksum..."
+          echo "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2  src-tauri/resources/ggml-large-v3-turbo-q5_0.bin" | shasum -a 256 -c -
+
+          echo "Downloading FFmpeg for macOS (arm64, osxexperts build)..."
+          curl -L -o ffmpeg.zip "https://www.osxexperts.net/ffmpeg81arm.zip"
+          unzip -o ffmpeg.zip ffmpeg
+          echo "Verifying FFmpeg checksum..."
+          echo "9a08d61f9328e8164ba560ee7a79958e357307fcfeea6fe626b7d66cdc287028  ffmpeg" | shasum -a 256 -c -
+          mv ffmpeg src-tauri/bin/ffmpeg-aarch64-apple-darwin
+          chmod +x src-tauri/bin/ffmpeg-aarch64-apple-darwin
+
+      - name: Build Tauri App (Metal)
+        run: npm run tauri build -- --features metal
+
+      - name: Upload macOS Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: LantipScript-macOS-Installer
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
