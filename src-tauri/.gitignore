@@ -7,6 +7,6 @@
 /gen/schemas
 
 # Ignore heavy AI models and sidecars
-src-tauri/resources/*.bin
-src-tauri/bin/ffmpeg*
-src-tauri/target/release/bundle/dmg/lantipscript_0.1.0_aarch64.dmg
+# NOTE: patterns are relative to this file, so do NOT prefix with `src-tauri/`.
+resources/*.bin
+bin/ffmpeg*

@@ -84,10 +84,12 @@ export default function App() {
   },[]);
 
   const formatTime = (ms: number) => {
-    const totalSeconds = Math.floor(ms / 1000);
+    const totalMs = Math.max(0, Math.floor(ms));
+    const totalSeconds = Math.floor(totalMs / 1000);
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const millis = totalMs % 1000;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
   };
 
   // Reusable core processor for both button clicks and drag/drop
@@ -139,7 +141,10 @@ export default function App() {
   async function handleExport() {
     if (segments.length === 0) return;
     try {
-      const textContent = segments.map(s => `[${formatTime(s.start_ms)}] ${s.text}`).join('\n\n');
+      const lastEnd = segments[segments.length - 1].end_ms;
+      const textContent =
+        segments.map(s => `[${formatTime(s.start_ms)}] ${s.text}`).join('\n\n') +
+        `\n\n[${formatTime(lastEnd)}] [END]`;
       const savePath = await save({
         filters: [{ name: 'Text Document', extensions: ['txt'] }],
         defaultPath: 'LantipScript_Transcript.txt'
@@ -251,7 +256,7 @@ export default function App() {
                 {/* Clickable Timestamp */}
                 <div 
                   onClick={() => jumpToTime(seg.start_ms)}
-                  className={`w-14 flex-shrink-0 mt-1 text-sm font-bold font-sans cursor-pointer transition-colors ${
+                  className={`w-20 flex-shrink-0 mt-1 text-sm font-bold font-sans tabular-nums whitespace-nowrap cursor-pointer transition-colors ${
                     isActive ? 'text-lantip-dark' : 'text-lantip-blue hover:text-lantip-dark'
                   }`}
                 >

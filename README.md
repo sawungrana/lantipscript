@@ -21,9 +21,11 @@ Want to build it yourself?
 
 1. Clone the repo: `git clone https://github.com/sawungrana/lantipscript.git`
 2. Install dependencies: `npm install`
-3. **The Brains:** Download the `ggml-small.bin` Whisper model and put it in `src-tauri/resources/`.
+3. **The Brains:** Download the `ggml-large-v3-turbo-q5_0.bin` Whisper model and put it in `src-tauri/resources/` (see `docs/MODELS.md` for URLs and checksums).
 4. **The Ears:** Download the static FFmpeg binary for your OS, rename it properly (e.g., `ffmpeg-aarch64-apple-darwin`), and put it in `src-tauri/bin/`.
-5. Run it: `npm run tauri dev`
+5. Run it with GPU acceleration: `npm run tauri dev -- --features metal` (macOS) or
+   `npm run tauri dev -- --features vulkan` (Windows/Linux). Without a `--features`
+   flag the app still builds and runs, but CPU-only (slower).
 
 ---
 *Designed with ❤️ for qualitative researchers.*
