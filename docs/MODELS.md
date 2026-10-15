@@ -12,22 +12,34 @@ can use. Model files are **not committed to git**; CI downloads them into
 - **Policy:** the app does **not** download models at runtime. A model is bundled in
   the installer; alternative models may be linked from a future website.
 
-## Currently bundled
+## Currently bundled (one model per SKU)
 
-**Decision O1 (2026-10-15):** the bundled default is
-`ggml-large-v3-turbo-q5_0.bin` (809M params, q5_0 quant, 547.4 MiB). It replaces
-`ggml-small.bin` (465.0 MiB) — nearly the same installer size, much better accuracy.
-Requires the GPU backends (Vulkan/Metal) to be fast; CPU-only fallback is slower than
-the old `small` (see `docs/plan.md` Attention/watchlist).
+**Decision S1–S4 (2026-10-16):** every release ships in three SKU variants, and each
+installer bundles exactly one model (no runtime downloads, no model picker). The app
+resolves the bundled model by priority order **turbo → small-q5_1 → tiny-q5_1**
+(`KNOWN_MODELS` in `src-tauri/src/lib.rs`), so a dev machine with several models in
+`resources/` still resolves deterministically.
 
-| File | Size | SHA-256 |
-| --- | --- | --- |
-| `ggml-large-v3-turbo-q5_0.bin` | 574,041,195 B (547.4 MiB) | `394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2` |
+| SKU | File | Size | SHA-256 |
+| --- | --- | --- | --- |
+| **Full** | `ggml-large-v3-turbo-q5_0.bin` | 574,041,195 B (547.4 MiB) | `394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2` |
+| **Lite** | `ggml-small-q5_1.bin` | 190,085,487 B (181.3 MiB) | `ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb` |
+| **Express** | `ggml-tiny-q5_1.bin` | 32,152,673 B (30.7 MiB) | `818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7` |
 
-> Previously bundled: `ggml-small.bin` — 487,601,967 B (465.0 MiB) —
+- **Full** — accuracy sweet spot for GPU-accelerated machines (Metal/Vulkan).
+- **Lite** — for CPU-only / older machines: the old default quality tier, roughly 3x
+  faster than turbo on CPU.
+- **Express** — draft / small-download variant. **Accuracy caveat:** tiny is markedly
+  weaker than small/base, especially for Bahasa Indonesia and noisy interview audio.
+  Position it as "draft", never as "recommended".
+
+In-app details: the engine popover shows the edition + model, and a Full install whose
+GPU init fails suggests the Lite build once (plan S9–S10).
+
+> Previously bundled: `ggml-small.bin` (full precision) — 487,601,967 B (465.0 MiB) —
 > `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`.
-> Keep available as a fallback candidate (low-end / GPU-less machines) and for a
-> future website.
+> Kept in the multilingual table below as a fallback candidate and for a future
+> website.
 
 ## Multilingual models
 

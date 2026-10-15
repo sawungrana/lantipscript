@@ -10,7 +10,9 @@ Append-only log of decisions, changes, and handover notes for LantipScript.
   than the old `small`**. This can look like "the app got slower" with no explanation.
   **UI now surfaces this (Phase 3):** the header gear shows the active backend with a
   status dot (green = GPU, amber = CPU) and Rust logs the backend name on model load.
-  If reports still appear, consider bundling a small fallback model or prompting.
+  **Mitigated (Phase 5, 2026-10-16):** Lite/Express SKUs exist as CPU-first downloads,
+  and a Full install whose GPU init fell back to CPU shows a one-time nudge toward Lite
+  (plan S10). Remaining: verify the nudge on a real GPU-less Windows machine.
 - **macOS deployment target (2026-10-15).** `tauri build` exports Tauri's
   `bundle.macOS.minimumSystemVersion` (default **10.13**) as `MACOSX_DEPLOYMENT_TARGET`.
   whisper.cpp 0.16 uses `std::filesystem` (needs >= 10.15), so the Tauri default breaks
@@ -315,3 +317,135 @@ Note: macOS CI run 38767813523 went green (6m22s) after the deployment-target fi
   auto-scroll, edit + export, invalid-file card, Force CPU round-trip.
 - Windows runtime check on the 5800U laptop deferred by user; final artifacts for both
   platforms re-dispatched after this commit.
+
+---
+
+## 2026-10-16 — Phase 5: SKU rollout (Full / Lite / Express)
+
+### Decisions
+
+- **S1–S13 locked in `docs/plan.md`.** One app, three release SKUs that differ only by
+  the bundled Whisper model: Full = `large-v3-turbo-q5_0`, Lite = `small-q5_1`,
+  Express = `tiny-q5_1`. Rationale: 452 MB+ downloads are heavy for the target audience
+  (Indonesian researchers, sometimes low bandwidth), a dual-model installer would make
+  *every* download bigger (~750 MB), and model import from a website adds user friction.
+- **Express is positioned as "draft"**, not "recommended": tiny's accuracy is markedly
+  lower, especially for Bahasa Indonesia and noisy interview audio (S4).
+- **No model picker / no runtime downloads** (D1/D2 stand) — resolution is by registry
+  priority in the bundled resources.
+- **Windows ships NSIS only** (S12): the old 1.19 GB artifact was MSI + NSIS in one
+  upload; macOS was 535 MB with a single .dmg.
+
+### Done
+
+- `src-tauri/src/lib.rs`
+  - `KNOWN_MODELS` registry: (file, edition) in priority order turbo → small-q5_1 →
+    tiny-q5_1; `edition_for()`; `resolve_model()` scans the bundled resource dir and
+    errors clearly when no known model is present.
+  - `EngineStatus.edition` added; `get_engine_status` prefers the loaded (cached) model
+    and falls back to the bundled SKU file; `transcribe_audio` resolves through the
+    registry (the old `WHISPER_MODEL_FILE` const is gone). Context cache unchanged.
+- `src/App.tsx`
+  - Popover shows `edition · model`; Express shows a "Draft quality" hint.
+  - One-time CPU-fallback nudge on Full: after a *successful* transcription with
+    `using_gpu = false`, `forced_cpu = false`, and no dismissal flag
+    (`lantipscript.liteNudgeDismissed`), an amber card suggests Lite and opens the
+    Releases page via `@tauri-apps/plugin-opener` (`opener:default` already allows
+    https). Suppressed on Lite/Express and with forced CPU.
+- `.github/workflows/build-macos.yml`, `build-windows.yml`
+  - Compile once (`tauri build --no-bundle --features metal|vulkan`), then per SKU:
+    clean `resources/`, download model, SHA-256 verify, `tauri bundle` (dmg / nsis),
+    copy to `artifacts/lantipscript_<ver>_<arch>_<sku>`.
+  - macOS asserts the finished `.app` contains exactly the expected `.bin`; Windows
+    best-effort-verifies the NSIS installer's contents with 7-Zip (skips if 7-Zip is
+    unavailable) and no longer produces/uploads MSI.
+  - Upload names are now `LantipScript-<OS>-Installers` (plural).
+- Docs: README download table (+ Express caveat, dev note on model resolution),
+  `docs/MODELS.md` "Currently bundled (one model per SKU)" with all three checksums,
+  plan.md S1–S13 + Phase 5 + updated watchlist, new
+  `docs/release-notes-template.md`.
+
+### Verified
+
+- `cargo check` (CPU-only) and `cargo check --features metal` pass.
+- `npx tsc --noEmit` and `npm run build` pass.
+- Both workflow YAMLs parse (ruby/psych); `npm run tauri bundle -- --help` confirms the
+  `--bundles` arg forwarding used in CI; the CI bash read/loop logic was dry-run
+  locally.
+- Note: `cargo check --features metal` initially failed with the familiar
+  `std::filesystem`/10.15 errors from a stale **Phase 3 repro** CMake cache;
+  `cargo clean -p whisper-rs-sys` fixed it (not a regression).
+- **Local macOS dry-run of the full SKU pipeline** (same commands as CI): release build
+  `--no-bundle --features metal` (29 s incremental), then per SKU — model copied +
+  SHA-256 verified in `resources/`, `tauri bundle -- --bundles app dmg --features metal`,
+  assert `.app` contains exactly the expected `.bin`, copy DMG to `artifacts/`. All three
+  passed; `hdiutil verify` validates all three DMGs and the Express DMG was mounted to
+  confirm the shipped contents. **Measured sizes: Full 538 MB, Lite 204 MB, Express
+  56 MB.** Dev resources (turbo-q5 + `ggml-small.bin`) restored afterwards.
+- **Gotcha found during the dry-run:** `tauri bundle --bundles dmg` (dmg only) deletes
+  the intermediate `.app` after building the DMG, so post-bundle `.app` verification is
+  impossible — the workflow now uses `--bundles app dmg` to keep it. A failed DMG run
+  can also leave a stale `/Volumes/dmg.*` mount + `rw.*.dmg`; detach/remove and retry
+  (fresh CI runners are unaffected). Exact model + SHA checks in `resources/` remain as
+  the pre-bundle guard on Windows. Also: `tauri build` fails if `resources/*` matches
+  nothing (`glob pattern resources/* not found`) — keep one model in `resources/`
+  before compiling (CI always downloads one first; local devs: download one per README).
+
+### Version 1.0.0 — first stable release
+
+- Version bumped 0.1.0 → 1.0.0 in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
+  and `package.json` (+ lockfiles). Rationale: engine visibility, progress/cancel, UX
+  polish, and the SKU strategy complete the first stable feature set. CI derives
+  artifact names from `tauri.conf.json`, so no workflow changes were needed.
+- Added `src-tauri/examples/transcribe.rs` — dev-only harness that runs the same
+  pipeline as the app (bundled ffmpeg sidecar conversion, wav reading, and whisper
+  params: greedy `best_of: 1`, auto language, physical threads, GPU when compiled with
+  `metal`/`vulkan`). Usage:
+  `cd src-tauri && cargo run --release --example transcribe --features metal -- <audio> [model] [--gpu|--cpu]`
+
+### Real-audio verification (`src/assets/test_audio.mp3`, 8m18s, English, M2 Metal)
+
+| SKU | Model | Wall clock | RTF | Segments |
+| --- | --- | --- | --- | --- |
+| Full | turbo-q5_0 | 26.5 s | 18.8x | 224 |
+| Lite | small-q5_1 | 10.7 s | 46.6x | 31 |
+| Express | tiny-q5_1 | 3.5 s | 144.1x | 49 |
+
+- Quality spot-check (the "letter and ... of flowers" + "rambling" passage):
+  - **Lite** near-verbatim: "a small gesture of a letter and a bouquet of flowers",
+    "rambling".
+  - **Full** misheard: "a bucket of flowers", "rumbling", and fragmented into 224
+    mostly 1–2 s segments.
+  - **Express** garbled: "smoldier", "bookhead of flowers", "robbing" — confirms the
+    draft-only positioning.
+- **Observation:** on this one sample the Lite model beat Full on speed *and* text.
+  One sample is not a verdict (upstream benchmarks favor turbo), but worth a
+  follow-up: try `set_no_context(true)` and/or longer segment merging for Full, and
+  re-test across more recordings (incl. Bahasa Indonesia). If it holds, revisit which
+  model the quality SKU should ship.
+- Local 1.0.0 DMGs rebuilt in the gitignored `artifacts/` for install testing.
+
+### Repo polish — README as the front door
+
+- Rewrote `README.md` in a quieter register: the privacy story is carried by
+  behavior, not adjectives (no model screen, no model downloads, nothing to leak).
+- Logo (already tracked in `src/assets/`) now heads the README; the screenshot moved
+  from the gitignored `dist/` to `src/assets/lantipscript_screenshot.png` so GitHub
+  renders it.
+- Download guidance is one table keyed to "Choose it when", with `Full if the machine
+  is new, Lite if it isn't` as the shorthand. Home: lantip.space/lantipscript.
+- `docs/release-notes-template.md` brought into the same voice; UI copy in `App.tsx`
+  is the remaining user-facing surface to review.
+
+### Still open / notes
+
+- Dispatch both workflows and inspect: macOS loop is locally proven; the open items are
+  the actual Actions runs and the Windows NSIS/7-Zip check.
+- Manual M2 checks: popover shows "Full · large-v3-turbo-q5_0"; run a CPU-only dev build
+  (`npm run tauri dev` without `--features`) to see the nudge fire once; dismissal
+  persists; Lite/Express installs never show it.
+- Windows 5800U: Vulkan vs CPU comparison still pending; the nudge needs a real
+  GPU-less machine to confirm.
+- If MSI is ever needed (enterprise/GPO), add it as a separate artifact (S12).
+- Real-audio follow-up above: compare Full vs Lite across more files (Bahasa
+  Indonesia too) and try `set_no_context(true)` for Full's segmentation.

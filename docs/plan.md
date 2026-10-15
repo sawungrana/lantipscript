@@ -1,7 +1,7 @@
 # LantipScript — Improvement Plan
 
-- **Status:** Approved 2026-10-15 · Phases 0–4 complete · awaiting manual mac checks + Windows runtime check
-- **Date:** 2026-10-15
+- **Status:** Approved 2026-10-15 · Phases 0–4 complete · **Phase 5 (SKU rollout) complete 2026-10-16** · awaiting CI dispatch + manual mac/Windows checks
+- **Date:** 2026-10-16
 - **Owner:** sawungrana
 
 ## Context
@@ -67,9 +67,42 @@ by upgrading `whisper-rs` to 0.16, plus targeted CPU/UX hygiene.
   is *slower* than the old `small`. Watch for reports of "Windows is slow" from
   machines where GPU acceleration silently fell back to CPU; we need to surface the
   active backend (Phase 3) so this is visible rather than guessed.
+  *Superseded for releases by S1–S4 (2026-10-16):* the Full SKU bundles this model;
+  Lite/Express bundle `small-q5_1` / `tiny-q5_1`.
 - **D7.** Word-level timestamps (DTW token timestamps / `split_on_word`) are
   **deferred indefinitely**. The app's value includes minimalism; revisit only if
   users report segment granularity is too coarse. See "Deferred decisions".
+
+### SKU decisions (Phase 5, 2026-10-16)
+
+- **S1.** Three release SKUs — **Full / Lite / Express** — same app name, identifier,
+  and version; a SKU is just a different bundled model + artifact suffix.
+- **S2.** Full = `ggml-large-v3-turbo-q5_0.bin` (547.4 MiB) — GPU machines, best accuracy.
+- **S3.** Lite = `ggml-small-q5_1.bin` (181.3 MiB) — CPU-only / older machines; old
+  default quality tier, ~3x turbo on CPU.
+- **S4.** Express = `ggml-tiny-q5_1.bin` (30.7 MiB) — low bandwidth / draft passes,
+  explicitly labeled lower accuracy (EN + Bahasa Indonesia + noisy audio).
+- **S5.** All three model checksums come from `docs/MODELS.md`; no new models sourced.
+- **S6.** No model picker, no in-app downloads (D1/D2 stand): exactly one model per install.
+- **S7.** Runtime resolution replaces the compile-time const: `KNOWN_MODELS` registry in
+  priority order turbo → small-q5_1 → tiny-q5_1; first file present in `resources/` wins;
+  clear error if none. Deterministic for dev machines with several models.
+- **S8.** `EngineStatus` gains `edition` ("Full" | "Lite" | "Express" | "Unknown");
+  `model` stays the file name. Context cache remains keyed by path.
+- **S9.** Engine popover shows `edition · model`; Express additionally shows a
+  "draft quality" hint.
+- **S10.** CPU-fallback nudge: after a successful transcription on Full with
+  `using_gpu = false` and CPU not user-forced, show a one-time dismissible card
+  (localStorage) suggesting Lite, linking to the Releases page. Suppressed on Lite,
+  Express, and `forced_cpu`. Testable locally with a no-features CPU-only build.
+- **S11.** CI builds once per OS (`tauri build --no-bundle`), then `tauri bundle` per SKU
+  with exactly one SHA-256-verified model in `resources/` (macOS also asserts the
+  finished `.app` contains exactly that `.bin`; Windows best-effort 7-Zip check).
+- **S12.** Windows ships **NSIS only** (`--bundles nsis`); MSI is deferred as an
+  enterprise extra. Fixes the 1.19 GB artifact (was MSI + NSIS in one upload).
+- **S13.** Artifact naming: `lantipscript_<version>_<arch>_<sku>.dmg` /
+  `lantipscript_<version>_x64_<sku>-setup.exe`; uploads are
+  `LantipScript-<OS>-Installers`.
 
 ## Deferred decisions
 
@@ -81,8 +114,17 @@ by upgrading `whisper-rs` to 0.16, plus targeted CPU/UX hygiene.
 
 - **GPU init failure on real hardware.** If a user's machine cannot initialize
   Vulkan/Metal, the app falls back to CPU with the heavier turbo-q5 model -> slower
-  than before. Detect and **show the active backend in the UI**; consider a startup
-  warning. Re-evaluate bundling a small fallback model if reports appear.
+  than before. **Mitigated (Phase 5):** the backend is shown in the UI (Phase 3), Lite
+  exists as the CPU-first download, and a Full install that falls back to CPU suggests
+  Lite once (S10). Remaining: verify the nudge on a real GPU-less Windows machine.
+- **`tauri bundle` resource copying (Phase 5).** The per-SKU CI loop depends on the
+  bundler re-copying `resources/` on every `tauri bundle` run; the macOS job asserts
+  the finished `.app` contains exactly the expected model. **Verified locally
+  (2026-10-16, macOS):** all three SKUs bundle exactly one, correct model. Two gotchas:
+  `--bundles dmg` alone *deletes* the intermediate `.app` (CI asks for `app dmg` to
+  keep it verifiable), and a failed DMG run can leave a stale `/Volumes/dmg.*` mount +
+  `rw.*.dmg` behind (detach and retry; fresh CI runners are unaffected). Windows side
+  still to confirm via a dispatched run.
 - **Vulkan build paths.** `whisper-rs-sys` + CMake on Windows is sensitive to long
   paths; keep the short `CARGO_TARGET_DIR` workaround in CI.
 
@@ -181,6 +223,35 @@ Done:
 Verified: `npx tsc --noEmit` + `npm run build` pass. Manual macOS checklist for the
 user: Metal dot green, progress + cancel, auto-scroll, edit + export, invalid-file card.
 
+### Phase 5 — SKU rollout: Full / Lite / Express (complete 2026-10-16)
+Done:
+- Decisions S1–S13 (above) implement the Lite/Full-style SKU strategy over a model
+  picker: smaller downloads for low-bandwidth / low-spec users, zero new UI surface
+  beyond an edition label and the one-time nudge.
+- Rust (`src-tauri/src/lib.rs`): `KNOWN_MODELS` registry (turbo → small-q5_1 →
+  tiny-q5_1), `resolve_model()` with a clear missing-model error, `EngineStatus.edition`;
+  `transcribe_audio` and `get_engine_status` both resolve through the registry. Context
+  cache untouched (path-keyed).
+- Frontend (`src/App.tsx`): popover shows `edition · model` (+ Express draft hint);
+  one-time dismissible CPU-fallback nudge on Full that opens the Releases page via the
+  opener plugin (`opener:default` already allows https).
+- CI: both workflows now compile once (`tauri build --no-bundle`) and then run
+  `tauri bundle` per SKU with a SHA-256-verified model in `resources/`; macOS asserts
+  the finished `.app` contains exactly the expected `.bin`; Windows ships NSIS only
+  (`--bundles nsis`) and best-effort-verifies the installer with 7-Zip. Artifacts:
+  `lantipscript_<ver>_<arch>_<sku>` uploads.
+- Docs: README download table + developer note, `docs/MODELS.md` three-SKU section with
+  the Express accuracy caveat, `docs/release-notes-template.md`.
+Verified: `cargo check` + `cargo check --features metal`, `npx tsc --noEmit`,
+`npm run build`, both workflow YAMLs parse, `npm run tauri bundle -- --help` arg
+forwarding, and the CI bash loop read/iteration. **Local macOS dry-run of the full CI
+loop (2026-10-16):** one release build + per SKU `tauri bundle -- --bundles app dmg
+--features metal` with a SHA-256-verified model in `resources/`; each `.app` contained
+exactly the expected `.bin`; all three DMGs pass `hdiutil verify`; the Express DMG was
+mounted and its contents confirmed. **Measured installer sizes: Full 538 MB, Lite
+204 MB, Express 56 MB** (DMGs kept in the gitignored `artifacts/` for manual testing).
+Not verified: actual CI runs (dispatch both), nudge on a real GPU-less Windows machine.
+
 ## Verification
 
 - `npx tsc --noEmit` and `npm run build` pass.
@@ -191,6 +262,8 @@ user: Metal dot green, progress + cancel, auto-scroll, edit + export, invalid-fi
   same file; expect roughly the upstream Renoir ratio (~4x).
 - Regression: language auto-detect (EN + Bahasa Indonesia) still works; export
   output still ends with `[MM:SS.mmm] [END]`.
+- SKU regression (Phase 5): each installer shows its own edition in the popover;
+  Full on a CPU-only build shows the Lite nudge once; Lite/Express never show it.
 
 ## Risks
 
@@ -206,6 +279,8 @@ user: Metal dot green, progress + cancel, auto-scroll, edit + export, invalid-fi
 ## Backlog (later)
 
 - Model picker + hot-loading (cache keyed by path; `WhisperContext` is `Send + Sync`).
+  SKU variants were chosen instead for now (S1–S13); the registry/resolution added in
+  Phase 5 is the same groundwork a picker would need.
 - Import a local `.bin` model file (offline-friendly alternative to downloads).
 - Website linking to HuggingFace model URLs.
 - CUDA and CoreML/ANE backends; tinydiarize speaker turns.
