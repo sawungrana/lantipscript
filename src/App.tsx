@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import WaveSurfer from "wavesurfer.js";
 import { Play, Pause, Download, Sparkles, Plus, FileAudio, Settings, X } from "lucide-react";
@@ -22,9 +23,12 @@ interface EngineStatus {
   loaded: boolean;
   forced_cpu: boolean;
   model: string;
+  edition: "Full" | "Lite" | "Express" | "Unknown";
 }
 
 const GPU_SETTING_KEY = "lantipscript.gpuEnabled";
+const LITE_NUDGE_KEY = "lantipscript.liteNudgeDismissed";
+const RELEASES_URL = "https://github.com/sawungrana/lantipscript/releases";
 
 const formatTime = (ms: number) => {
   const totalMs = Math.max(0, Math.floor(ms));
@@ -94,6 +98,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [gpuEnabled, setGpuEnabled] = useState<boolean>(true);
+  const [showLiteNudge, setShowLiteNudge] = useState<boolean>(false);
 
   const waveformContainerRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -192,9 +197,11 @@ export default function App() {
     // Quick validation
     const isMedia = /\.(mp3|wav|m4a|mp4|mov)$/i.test(actualPath);
     if (!isMedia) {
-      setErrorMessage("Please provide a valid audio or video file (mp3, wav, m4a, mp4, mov).");
+      setErrorMessage("LantipScript reads audio and video files — mp3, wav, m4a, mp4, mov.");
       return;
     }
+
+    let succeeded = false;
 
     try {
       isTranscribingRef.current = true;
@@ -210,6 +217,7 @@ export default function App() {
 
       const result = await invoke<TranscriptSegment[]>("transcribe_audio", { inputPath: actualPath });
       setSegments(result);
+      succeeded = true;
 
     } catch (error) {
       // Cancelling is a user action, not an error
@@ -220,13 +228,41 @@ export default function App() {
       isTranscribingRef.current = false;
       setIsTranscribing(false);
       setProgress(null);
-      refreshEngineStatus();
+
+      const status = await refreshEngineStatus();
+      // Full SKU on a machine where GPU init failed: suggest the Lite build once.
+      if (
+        succeeded &&
+        status &&
+        !status.using_gpu &&
+        !status.forced_cpu &&
+        status.edition === "Full" &&
+        !localStorage.getItem(LITE_NUDGE_KEY)
+      ) {
+        setShowLiteNudge(true);
+      }
     }
   }
 
-  async function refreshEngineStatus() {
+  async function refreshEngineStatus(): Promise<EngineStatus | null> {
     try {
-      setEngineStatus(await invoke<EngineStatus>("get_engine_status"));
+      const status = await invoke<EngineStatus>("get_engine_status");
+      setEngineStatus(status);
+      return status;
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
+  }
+
+  function dismissLiteNudge() {
+    localStorage.setItem(LITE_NUDGE_KEY, "true");
+    setShowLiteNudge(false);
+  }
+
+  async function handleGetLite() {
+    try {
+      await openUrl(RELEASES_URL);
     } catch (error) {
       console.error(error);
     }
@@ -278,7 +314,7 @@ export default function App() {
       if (!savePath) return;
       await writeTextFile(savePath, textContent);
     } catch (error) {
-      setErrorMessage(`Export failed: ${String(error)}`);
+      setErrorMessage(`Couldn't save the transcript: ${String(error)}`);
     }
   }
 
@@ -323,7 +359,7 @@ export default function App() {
         <div className="absolute inset-0 z-50 drag-overlay flex items-center justify-center m-4 sm:m-5 rounded-[1.5rem] bg-white/60 border-4 border-dashed border-lantip-dark">
           <div className="flex flex-col items-center text-lantip-dark animate-float">
             <FileAudio className="w-20 h-20 mb-4 opacity-80" />
-            <p className="font-serif italic text-4xl">Drop media file to transcribe</p>
+            <p className="font-serif italic text-4xl">Drop a recording here</p>
           </div>
         </div>
       )}
@@ -380,7 +416,14 @@ export default function App() {
                     )}
                   </p>
                   <p className="text-xs text-lantip-dark/60 mt-1 mb-4 break-all">
-                    {engineStatus ? engineStatus.model.replace(/^ggml-/, '').replace(/\.bin$/, '') : '—'}
+                    {engineStatus
+                      ? `${engineStatus.edition} · ${engineStatus.model.replace(/^ggml-/, '').replace(/\.bin$/, '')}`
+                      : '—'}
+                    {engineStatus?.edition === 'Express' && (
+                      <span className="block text-amber-600 mt-1">
+                        Draft quality — quick, and it mishears more.
+                      </span>
+                    )}
                   </p>
                   <label className={`flex items-start gap-3 select-none ${isTranscribing ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
                     <input
@@ -410,7 +453,7 @@ export default function App() {
           ) : (
             <button onClick={handleImportButton} className="neo-btn neo-btn-primary group">
               <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform duration-300" />
-              <span>New Audio</span>
+              <span>Open Audio</span>
             </button>
           )}
         </div>
@@ -435,11 +478,37 @@ export default function App() {
           </div>
         )}
         
+        {/* Full SKU on a GPU-less machine: suggest the Lite build */}
+        {showLiteNudge && (
+          <div className="flex items-start justify-between gap-4 border-[3px] border-lantip-dark rounded-2xl bg-amber-100 px-5 py-4 mb-6 shadow-[4px_4px_0px_#555879] max-w-3xl mx-auto w-full flex-none">
+            <p className="text-sm font-bold text-lantip-dark">
+              No GPU acceleration on this machine, so listening takes longer.{' '}
+              <button
+                onClick={handleGetLite}
+                className="underline decoration-2 underline-offset-2 hover:text-lantip-blue transition-colors"
+              >
+                LantipScript Lite
+              </button>{' '}
+              carries a smaller model and moves faster here.
+            </p>
+            <button
+              onClick={dismissLiteNudge}
+              className="flex-shrink-0 text-lantip-dark/60 hover:text-lantip-dark transition-colors"
+              title="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Empty State with float animation */}
         {segments.length === 0 && !isTranscribing && (
           <div className="flex-1 flex flex-col items-center justify-center text-lantip-dark/50 space-y-4">
             <img src={logoIcon} alt="" className="w-16 h-16 opacity-40 grayscale animate-float" />
-            <p className="font-serif italic text-3xl text-lantip-dark/80">Drag and drop audio here.</p>
+            <p className="font-serif italic text-3xl text-lantip-dark/80">Drag in a recording.</p>
+            <p className="text-xs font-bold tracking-widest uppercase text-lantip-dark/40">
+              Everything stays on this computer
+            </p>
           </div>
         )}
 
@@ -448,7 +517,7 @@ export default function App() {
           <div className="flex-1 flex flex-col items-center justify-center text-lantip-dark space-y-5">
             <Sparkles className="w-10 h-10 animate-spin text-lantip-blue" />
             <p className="font-sans font-bold text-sm tracking-widest uppercase animate-pulse">
-              {progress === null ? "Preparing audio..." : "Transcribing offline securely..."}
+              {progress === null ? "Preparing the audio..." : "Listening on this computer..."}
             </p>
             {progress !== null && (
               <div className="w-64">
@@ -494,7 +563,7 @@ export default function App() {
           <div className="flex-1 w-full relative">
             {!filePath && (
               <div className="absolute inset-0 flex items-center justify-center font-bold text-lantip-dark/30 text-sm z-10 pointer-events-none">
-                Timeline waveform will appear here
+                The waveform will appear here
               </div>
             )}
             <div ref={waveformContainerRef} className="w-full cursor-pointer transition-opacity duration-500" />
