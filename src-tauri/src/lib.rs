@@ -6,11 +6,52 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-/// Bundled model path, relative to the Tauri resource directory.
-const WHISPER_MODEL_FILE: &str = "resources/ggml-large-v3-turbo-q5_0.bin";
+/// Bundled Whisper models in resolution priority order: (file name, edition).
+/// Each release SKU (Full/Lite/Express) ships exactly one of these in
+/// `resources/`; dev machines may keep several — the first match wins.
+const KNOWN_MODELS: &[(&str, &str)] = &[
+    ("ggml-large-v3-turbo-q5_0.bin", "Full"),
+    ("ggml-small-q5_1.bin", "Lite"),
+    ("ggml-tiny-q5_1.bin", "Express"),
+];
 
 /// Returned to the frontend when the user cancels a transcription.
 const CANCELLED_ERROR: &str = "TRANSCRIPTION_CANCELLED";
+
+struct ResolvedModel {
+    path: PathBuf,
+    file_name: String,
+    edition: &'static str,
+}
+
+fn edition_for(file_name: &str) -> &'static str {
+    KNOWN_MODELS
+        .iter()
+        .find(|(name, _)| *name == file_name)
+        .map(|(_, edition)| *edition)
+        .unwrap_or("Unknown")
+}
+
+/// Finds the bundled SKU model in the resource directory.
+fn resolve_model(app: &tauri::AppHandle) -> Result<ResolvedModel, String> {
+    let resources_dir = app
+        .path()
+        .resolve("resources", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("Failed to find resources directory: {e}"))?;
+
+    for (file_name, edition) in KNOWN_MODELS {
+        let path = resources_dir.join(file_name);
+        if path.is_file() {
+            return Ok(ResolvedModel {
+                path,
+                file_name: (*file_name).to_string(),
+                edition,
+            });
+        }
+    }
+
+    Err("No bundled Whisper model found. Please reinstall LantipScript.".to_string())
+}
 
 #[derive(serde::Serialize)]
 pub struct TranscriptSegment {
@@ -26,6 +67,7 @@ pub struct EngineStatus {
     pub loaded: bool,
     pub forced_cpu: bool,
     pub model: String,
+    pub edition: &'static str, // "Full" | "Lite" | "Express" | "Unknown"
 }
 
 // The context is expensive to load, so it is cached across transcriptions
@@ -222,11 +264,8 @@ async fn transcribe_audio(
     let state = state.inner().clone();
     state.cancel.store(false, Ordering::SeqCst);
 
-    // 1. Get the path to our bundled Whisper model
-    let model_path = app
-        .path()
-        .resolve(WHISPER_MODEL_FILE, tauri::path::BaseDirectory::Resource)
-        .map_err(|e| format!("Failed to find model: {e}"))?;
+    // 1. Find the bundled SKU model (Full/Lite/Express)
+    let model = resolve_model(&app)?;
 
     // 2. Get App Data Dir AND create it if it doesn't exist
     let app_data_dir = app
@@ -277,7 +316,7 @@ async fn transcribe_audio(
     // 5. Initialize and run Whisper off the async runtime
     let app_handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        run_whisper(&state, &model_path, audio_data, app_handle)
+        run_whisper(&state, &model.path, audio_data, app_handle)
     })
     .await
     .map_err(|e| format!("Transcription task failed: {e}"))?
@@ -289,17 +328,32 @@ fn cancel_transcription(state: tauri::State<'_, AppState>) {
 }
 
 #[tauri::command]
-fn get_engine_status(state: tauri::State<'_, AppState>) -> Result<EngineStatus, String> {
+fn get_engine_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<EngineStatus, String> {
     let forced_cpu = !state.gpu_enabled.load(Ordering::SeqCst);
     let cache = state
         .model
         .lock()
         .map_err(|_| "Model cache lock poisoned".to_string())?;
 
-    let model = Path::new(WHISPER_MODEL_FILE)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    // Prefer the loaded model; fall back to the bundled SKU file.
+    let (model, edition) = match cache.as_ref() {
+        Some(cached) => {
+            let file_name = cached
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let edition = edition_for(&file_name);
+            (file_name, edition)
+        }
+        None => match resolve_model(&app) {
+            Ok(resolved) => (resolved.file_name, resolved.edition),
+            Err(_) => ("none".to_string(), "Unknown"),
+        },
+    };
 
     let (backend, using_gpu) = match cache.as_ref() {
         Some(cached) => {
@@ -322,6 +376,7 @@ fn get_engine_status(state: tauri::State<'_, AppState>) -> Result<EngineStatus, 
         loaded: cache.is_some(),
         forced_cpu,
         model,
+        edition,
     })
 }
 
