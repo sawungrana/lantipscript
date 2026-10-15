@@ -5,7 +5,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import WaveSurfer from "wavesurfer.js";
-import { Play, Pause, Download, Sparkles, Plus, FileAudio } from "lucide-react";
+import { Play, Pause, Download, Sparkles, Plus, FileAudio, Settings, X } from "lucide-react";
 
 import fullLogo from "./assets/lantipscript_logo_color_full.png";
 import logoIcon from "./assets/lantipscript_logo_color_icon.png";
@@ -16,6 +16,16 @@ interface TranscriptSegment {
   text: string;
 }
 
+interface EngineStatus {
+  backend: "metal" | "vulkan" | "cpu";
+  using_gpu: boolean;
+  loaded: boolean;
+  forced_cpu: boolean;
+  model: string;
+}
+
+const GPU_SETTING_KEY = "lantipscript.gpuEnabled";
+
 export default function App() {
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
@@ -23,6 +33,11 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [gpuEnabled, setGpuEnabled] = useState<boolean>(true);
 
   const waveformContainerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -83,6 +98,27 @@ export default function App() {
     };
   },[]);
 
+  // Listen for whisper progress events (0-100)
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen<number>('transcribe-progress', (event) => setProgress(event.payload)).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  },[]);
+
+  // Restore the GPU preference and fetch the engine status
+  useEffect(() => {
+    const stored = localStorage.getItem(GPU_SETTING_KEY);
+    const enabled = stored === null ? true : stored === 'true';
+    setGpuEnabled(enabled);
+    invoke("set_gpu_enabled", { enabled }).catch(console.error);
+    refreshEngineStatus();
+  },[]);
+
   const formatTime = (ms: number) => {
     const totalMs = Math.max(0, Math.floor(ms));
     const totalSeconds = Math.floor(totalMs / 1000);
@@ -108,6 +144,8 @@ export default function App() {
       setIsTranscribing(true);
       setFilePath(actualPath);
       setSegments([]);
+      setErrorMessage(null);
+      setProgress(null);
 
       if (wavesurferRef.current) {
         wavesurferRef.current.load(convertFileSrc(actualPath));
@@ -117,11 +155,42 @@ export default function App() {
       setSegments(result);
 
     } catch (error) {
-      console.error(error);
-      alert(`Transcription Error: ${error}`);
+      // Cancelling is a user action, not an error
+      if (String(error) !== "TRANSCRIPTION_CANCELLED") {
+        setErrorMessage(String(error));
+      }
     } finally {
       isTranscribingRef.current = false;
       setIsTranscribing(false);
+      setProgress(null);
+      refreshEngineStatus();
+    }
+  }
+
+  async function refreshEngineStatus() {
+    try {
+      setEngineStatus(await invoke<EngineStatus>("get_engine_status"));
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  async function handleCancel() {
+    try {
+      await invoke("cancel_transcription");
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  async function handleToggleGpu(nextEnabled: boolean) {
+    setGpuEnabled(nextEnabled);
+    localStorage.setItem(GPU_SETTING_KEY, String(nextEnabled));
+    try {
+      await invoke("set_gpu_enabled", { enabled: nextEnabled });
+      await refreshEngineStatus();
+    } catch (error) {
+      console.error(error);
     }
   }
 
@@ -199,24 +268,97 @@ export default function App() {
             <Download className="w-4 h-4 group-hover:-translate-y-0.5 transition-transform" />
             <span>Export</span>
           </button>
-          
-          <button 
-            onClick={handleImportButton} 
-            disabled={isTranscribing} 
-            className="neo-btn neo-btn-primary group"
-          >
-            {isTranscribing ? (
-              <Sparkles className="w-4 h-4 animate-pulse" />
-            ) : (
-              <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform duration-300" />
+
+          {/* Engine settings, hidden behind the gear icon */}
+          <div className="relative">
+            <button
+              onClick={() => setShowSettings((open) => !open)}
+              className="neo-btn neo-btn-secondary relative px-3! group"
+              title="Engine settings"
+            >
+              <Settings className="w-4 h-4 group-hover:rotate-45 transition-transform duration-300" />
+              <span
+                className={`absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-lantip-dark ${
+                  !engineStatus ? 'bg-lantip-blue' : engineStatus.using_gpu ? 'bg-emerald-500' : 'bg-amber-500'
+                }`}
+              />
+            </button>
+
+            {showSettings && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setShowSettings(false)} />
+                <div className="absolute right-0 top-full mt-4 z-40 w-72 bento-card p-5 text-left">
+                  <p className="text-xs font-bold uppercase tracking-widest text-lantip-dark/50 mb-3">
+                    Engine
+                  </p>
+                  <p className="font-bold text-sm">
+                    {engineStatus ? (
+                      <>
+                        {engineStatus.backend === 'metal' && 'Metal GPU'}
+                        {engineStatus.backend === 'vulkan' && 'Vulkan GPU'}
+                        {engineStatus.backend === 'cpu' && 'CPU'}
+                        {engineStatus.forced_cpu && ' (forced)'}
+                        {!engineStatus.loaded && ' · not loaded yet'}
+                      </>
+                    ) : (
+                      'Checking...'
+                    )}
+                  </p>
+                  <p className="text-xs text-lantip-dark/60 mt-1 mb-4 break-all">
+                    {engineStatus ? engineStatus.model.replace(/^ggml-/, '').replace(/\.bin$/, '') : '—'}
+                  </p>
+                  <label className={`flex items-start gap-3 select-none ${isTranscribing ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                    <input
+                      type="checkbox"
+                      checked={!gpuEnabled}
+                      disabled={isTranscribing}
+                      onChange={(e) => handleToggleGpu(!e.target.checked)}
+                      className="mt-0.5 w-4 h-4 accent-lantip-dark"
+                    />
+                    <span>
+                      <span className="block font-bold text-sm">Force CPU mode</span>
+                      <span className="block text-xs text-lantip-dark/60">
+                        Troubleshooting only. Applies on the next transcription (model reloads).
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </>
             )}
-            <span>{isTranscribing ? "Processing..." : "New Audio"}</span>
-          </button>
+          </div>
+
+          {isTranscribing ? (
+            <button onClick={handleCancel} className="neo-btn neo-btn-secondary group">
+              <X className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
+              <span>Cancel</span>
+            </button>
+          ) : (
+            <button onClick={handleImportButton} className="neo-btn neo-btn-primary group">
+              <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform duration-300" />
+              <span>New Audio</span>
+            </button>
+          )}
         </div>
       </header>
 
       {/* 2. MAIN TRANSCRIPT AREA */}
       <main className="bento-card flex-1 overflow-y-auto p-8 lg:px-24 scroll-smooth relative flex flex-col">
+
+        {/* Transcription error */}
+        {errorMessage && (
+          <div className="flex items-start justify-between gap-4 border-[3px] border-lantip-dark rounded-2xl bg-red-100 px-5 py-4 mb-6 shadow-[4px_4px_0px_#555879] max-w-3xl mx-auto w-full flex-none">
+            <p className="text-sm font-bold text-lantip-dark whitespace-pre-wrap break-words">
+              {errorMessage}
+            </p>
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="flex-shrink-0 text-lantip-dark/60 hover:text-lantip-dark transition-colors"
+              title="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         
         {/* Empty State with float animation */}
         {segments.length === 0 && !isTranscribing && (
@@ -228,11 +370,22 @@ export default function App() {
 
         {/* Loading State */}
         {isTranscribing && segments.length === 0 && (
-          <div className="flex-1 flex flex-col items-center justify-center text-lantip-dark space-y-4">
+          <div className="flex-1 flex flex-col items-center justify-center text-lantip-dark space-y-5">
             <Sparkles className="w-10 h-10 animate-spin text-lantip-blue" />
             <p className="font-sans font-bold text-sm tracking-widest uppercase animate-pulse">
-              Transcribing offline securely...
+              {progress === null ? "Preparing audio..." : "Transcribing offline securely..."}
             </p>
+            {progress !== null && (
+              <div className="w-64">
+                <div className="h-5 border-[3px] border-lantip-dark rounded-full bg-white overflow-hidden">
+                  <div
+                    className="h-full bg-lantip-blue transition-[width] duration-300 ease-out"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+                <p className="text-center text-xs font-bold mt-2 tabular-nums">{progress}%</p>
+              </div>
+            )}
           </div>
         )}
 

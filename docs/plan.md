@@ -1,6 +1,6 @@
 # LantipScript — Improvement Plan
 
-- **Status:** Approved 2026-10-15 · Phases 0–2 complete · Phase 3 next
+- **Status:** Approved 2026-10-15 · Phases 0–3 complete · Phase 4 next
 - **Date:** 2026-10-15
 - **Owner:** sawungrana
 
@@ -143,11 +143,27 @@ Done:
   `README.md`).
 Not verified here: actual GitHub Actions runs (needs a push + manual dispatch).
 
-### Phase 3 — App integration (`src/App.tsx`)
-- Consume `transcribe-progress` -> progress bar; add Cancel button.
-- Show backend in use (GPU/CPU) + active model somewhere unobtrusive.
-- GPU on/off toggle (settings), persisted locally.
-- Handle transcription errors (temp cleanup already handled Rust-side).
+### Phase 3 — App integration (complete)
+Done:
+- `transcribe-progress` consumed via an event listener; loading area shows "Preparing
+  audio..." until the first event, then a bordered progress bar + percent.
+- Cancel button replaces "New Audio" while transcribing -> `cancel_transcription`;
+  cancellation is silent (back to empty state, no error, no alert).
+- **Engine visibility**: a settings gear in the header with a status dot
+  (blue = unknown, green = GPU, amber = CPU) opens a popover showing the active
+  backend ("Metal GPU" / "Vulkan GPU" / "CPU"), whether it is forced, whether the
+  model is loaded yet, and the model name. This surfaces the silent CPU-fallback
+  watchlist risk.
+- **Force CPU mode** toggle in the popover, persisted in localStorage, pushed to Rust
+  via `set_gpu_enabled` (clears the cached context so the next run reloads).
+- Rust: `gpu_enabled` in `AppState`, `gpu_backend()` (metal/vulkan/None),
+  `EngineStatus` + `get_engine_status` / `set_gpu_enabled` commands.
+- Transcription failures now show a dismissible inline error card instead of `alert`.
+- **Build fix:** `bundle.macOS.minimumSystemVersion` = `11.0` in `tauri.conf.json`.
+  Tauri's default (10.13) is exported as `MACOSX_DEPLOYMENT_TARGET` during
+  `tauri build`, which breaks whisper.cpp 0.16's `std::filesystem` usage
+  (`'path' is unavailable: introduced in macOS 10.15`). Root cause of the first
+  failed macOS CI run.
 
 ### Phase 4 — UX + precision
 - Memoize transcript rows (`React.memo`, pass only `isActive`) and/or throttle

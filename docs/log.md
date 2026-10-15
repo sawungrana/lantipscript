@@ -8,8 +8,14 @@ Append-only log of decisions, changes, and handover notes for LantipScript.
   Metal/Vulkan is on by default. If GPU init fails on a user's machine, we fall back
   to CPU, and the bundled model is now `large-v3-turbo-q5_0`, which is **slower on CPU
   than the old `small`**. This can look like "the app got slower" with no explanation.
-  We must **show the active backend in the UI** and log which backend was used. If
-  reports appear, consider bundling a small fallback model or prompting the user.
+  **UI now surfaces this (Phase 3):** the header gear shows the active backend with a
+  status dot (green = GPU, amber = CPU) and Rust logs the backend name on model load.
+  If reports still appear, consider bundling a small fallback model or prompting.
+- **macOS deployment target (2026-10-15).** `tauri build` exports Tauri's
+  `bundle.macOS.minimumSystemVersion` (default **10.13**) as `MACOSX_DEPLOYMENT_TARGET`.
+  whisper.cpp 0.16 uses `std::filesystem` (needs >= 10.15), so the Tauri default breaks
+  the Metal build. We pin `minimumSystemVersion: "11.0"` in `tauri.conf.json` — do not
+  remove it. Affects `tauri build` (local + CI), not `tauri dev`.
 - **Vulkan Windows build long paths.** `whisper-rs-sys` + CMake can fail on long paths;
   keep the short `CARGO_TARGET_DIR` workaround in CI.
 
@@ -235,3 +241,47 @@ Append-only log of decisions, changes, and handover notes for LantipScript.
 - Frontend still doesn't consume `transcribe-progress`/cancel; backend not shown in UI
   -> Phase 3 (watchlist stands).
 - Nothing committed yet on this branch.
+
+---
+
+## 2026-10-15 — Phase 3 complete (app integration; `main`)
+
+### Done
+
+- Rust (`src-tauri/src/lib.rs`):
+  - `AppState.gpu_enabled: Arc<AtomicBool>` (default true) read by
+    `get_or_load_context`; `gpu_backend()` returns `Some("metal")`/`Some("vulkan")`/None.
+  - New commands: `get_engine_status` (backend, using_gpu, loaded, forced_cpu, model)
+    and `set_gpu_enabled` (clears the cached context so the next run reloads).
+  - Backend name logged when the model loads.
+- UI (`src/App.tsx`):
+  - Progress bar consumes the `transcribe-progress` event; shows "Preparing audio..."
+    until the first event, then a bordered bar + percent.
+  - Cancel button replaces "New Audio" while transcribing -> silent reset via the
+    `cancel_transcription` command (no error shown).
+  - Header gear + status dot opens an engine popover: active backend, model, loaded
+    state, and a "Force CPU mode" toggle persisted in `localStorage`
+    (`lantipscript.gpuEnabled`).
+  - Transcription errors render as a dismissible inline card instead of `alert`.
+
+### Fixed: first macOS CI run failed (run 38766257410)
+
+- Failed in `Build Tauri App (Metal)` after ~3 min:
+  `ggml/src/ggml-backend-reg.cpp: 'path' is unavailable: introduced in macOS 10.15`.
+- Root cause: `tauri build` (not `tauri dev`) exports `MACOSX_DEPLOYMENT_TARGET` =
+  `bundle.macOS.minimumSystemVersion` (Tauri default **10.13**); whisper.cpp 0.16's
+  new backend registry uses `std::filesystem` (requires >= 10.15).
+- Reproduced locally: `cargo clean -p whisper-rs-sys` then
+  `MACOSX_DEPLOYMENT_TARGET=10.13 cargo check --features metal` -> same errors.
+- Fix: `src-tauri/tauri.conf.json` -> `"macOS": { "minimumSystemVersion": "11.0" }`.
+- Verified: `npm run tauri build -- --no-bundle --features metal` succeeds with a fresh
+  whisper.cpp build; `cargo check`, `cargo check --features metal`, `npx tsc --noEmit`
+  all pass.
+
+### Still open / notes
+
+- macOS CI re-dispatched after the fix to confirm green.
+- Windows artifact (run 38755168943) predates Phase 3; final Windows + macOS artifacts
+  will be rebuilt after Phase 4.
+- Runtime check on the Windows 5800U laptop still pending (Vulkan vs CPU speed) — the
+  engine popover now makes the active backend visible there.

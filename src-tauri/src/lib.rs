@@ -19,19 +19,38 @@ pub struct TranscriptSegment {
     pub text: String,
 }
 
+#[derive(serde::Serialize)]
+pub struct EngineStatus {
+    pub backend: &'static str, // "metal" | "vulkan" | "cpu"
+    pub using_gpu: bool,
+    pub loaded: bool,
+    pub forced_cpu: bool,
+    pub model: String,
+}
+
 // The context is expensive to load, so it is cached across transcriptions
 // and only reloaded if the resolved model path changes.
 struct CachedModel {
     path: PathBuf,
     context: Arc<WhisperContext>,
-    #[allow(dead_code)] // Surfaced in the UI in a later phase.
     using_gpu: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct AppState {
     model: Arc<Mutex<Option<CachedModel>>>,
     cancel: Arc<AtomicBool>,
+    gpu_enabled: Arc<AtomicBool>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            model: Arc::new(Mutex::new(None)),
+            cancel: Arc::new(AtomicBool::new(false)),
+            gpu_enabled: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 // Deletes the temp WAV even when transcription exits early via `?`.
@@ -43,28 +62,35 @@ impl Drop for TempFileGuard {
     }
 }
 
-#[cfg(any(feature = "metal", feature = "vulkan"))]
-fn gpu_compiled() -> bool {
-    true
+#[cfg(feature = "metal")]
+fn gpu_backend() -> Option<&'static str> {
+    Some("metal")
+}
+
+#[cfg(all(feature = "vulkan", not(feature = "metal")))]
+fn gpu_backend() -> Option<&'static str> {
+    Some("vulkan")
 }
 
 #[cfg(not(any(feature = "metal", feature = "vulkan")))]
-fn gpu_compiled() -> bool {
-    false
+fn gpu_backend() -> Option<&'static str> {
+    None
 }
 
 fn num_threads() -> i32 {
     num_cpus::get_physical().max(1) as i32
 }
 
-fn load_context(model_path: &Path) -> Result<(WhisperContext, bool), String> {
-    if gpu_compiled() {
-        let mut gpu_params = WhisperContextParameters::default();
-        gpu_params.use_gpu(true);
-        match WhisperContext::new_with_params(model_path, gpu_params) {
-            Ok(context) => return Ok((context, true)),
-            Err(e) => {
-                eprintln!("[lantipscript] GPU init failed ({e}); falling back to CPU");
+fn load_context(model_path: &Path, allow_gpu: bool) -> Result<(WhisperContext, bool), String> {
+    if allow_gpu {
+        if let Some(backend) = gpu_backend() {
+            let mut gpu_params = WhisperContextParameters::default();
+            gpu_params.use_gpu(true);
+            match WhisperContext::new_with_params(model_path, gpu_params) {
+                Ok(context) => return Ok((context, true)),
+                Err(e) => {
+                    eprintln!("[lantipscript] {backend} init failed ({e}); falling back to CPU");
+                }
             }
         }
     }
@@ -88,10 +114,14 @@ fn get_or_load_context(state: &AppState, model_path: &Path) -> Result<Arc<Whispe
         }
     }
 
-    let (context, using_gpu) = load_context(model_path)?;
+    let allow_gpu = state.gpu_enabled.load(Ordering::SeqCst);
+    let (context, using_gpu) = load_context(model_path, allow_gpu)?;
     eprintln!(
         "[lantipscript] model loaded ({})",
-        if using_gpu { "GPU" } else { "CPU" }
+        match (using_gpu, gpu_backend()) {
+            (true, Some(backend)) => backend,
+            _ => "cpu",
+        }
     );
 
     let context = Arc::new(context);
@@ -258,6 +288,55 @@ fn cancel_transcription(state: tauri::State<'_, AppState>) {
     state.cancel.store(true, Ordering::SeqCst);
 }
 
+#[tauri::command]
+fn get_engine_status(state: tauri::State<'_, AppState>) -> Result<EngineStatus, String> {
+    let forced_cpu = !state.gpu_enabled.load(Ordering::SeqCst);
+    let cache = state
+        .model
+        .lock()
+        .map_err(|_| "Model cache lock poisoned".to_string())?;
+
+    let model = Path::new(WHISPER_MODEL_FILE)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let (backend, using_gpu) = match cache.as_ref() {
+        Some(cached) => {
+            let backend = if cached.using_gpu {
+                gpu_backend().unwrap_or("gpu")
+            } else {
+                "cpu"
+            };
+            (backend, cached.using_gpu)
+        }
+        None => match (forced_cpu, gpu_backend()) {
+            (false, Some(backend)) => (backend, true),
+            _ => ("cpu", false),
+        },
+    };
+
+    Ok(EngineStatus {
+        backend,
+        using_gpu,
+        loaded: cache.is_some(),
+        forced_cpu,
+        model,
+    })
+}
+
+#[tauri::command]
+fn set_gpu_enabled(state: tauri::State<'_, AppState>, enabled: bool) {
+    let changed = state.gpu_enabled.swap(enabled, Ordering::SeqCst) != enabled;
+    if changed {
+        if let Ok(mut cache) = state.model.lock() {
+            // Drop the cached context so the next run reloads with the new
+            // preference. Any in-flight transcription keeps its own Arc.
+            *cache = None;
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -268,7 +347,9 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             transcribe_audio,
-            cancel_transcription
+            cancel_transcription,
+            get_engine_status,
+            set_gpu_enabled
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
