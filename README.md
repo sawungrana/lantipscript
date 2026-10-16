@@ -44,7 +44,48 @@ If you'd rather not decide between Full, Lite, and Express: Full if the machine 
 3. Click any line to jump the recording to that moment; edit the text directly.
 4. Export a plain `.txt` with timestamps, tidy for NVivo or Atlas.ti.
 
-English and Bahasa Indonesia are detected automatically.
+## Languages
+
+There is nothing to configure. The app listens first and detects the spoken
+language on its own. English and Bahasa Indonesia are the two the builds are
+tested with, so they are the safest bet — and every build also carries Whisper's
+full multilingual set:
+
+- **Full** (large-v3-turbo) — 100 languages.
+- **Lite** (small) and **Express** (tiny) — 99. The difference is Cantonese,
+  which large-v3 added and the smaller models don't know.
+
+One honest caveat: "supported" means the language is in the model's vocabulary,
+and accuracy varies — the smaller the model, the more it varies, especially for
+languages with less training material.
+
+<details>
+<summary>The complete list</summary>
+
+```
+en english · zh chinese · de german · es spanish · ru russian · ko korean
+fr french · ja japanese · pt portuguese · tr turkish · pl polish · ca catalan
+nl dutch · ar arabic · sv swedish · it italian · id indonesian · hi hindi
+fi finnish · vi vietnamese · he hebrew · uk ukrainian · el greek · ms malay
+cs czech · ro romanian · da danish · hu hungarian · ta tamil · no norwegian
+th thai · ur urdu · hr croatian · bg bulgarian · lt lithuanian · la latin
+mi maori · ml malayalam · cy welsh · sk slovak · te telugu · fa persian
+lv latvian · bn bengali · sr serbian · az azerbaijani · sl slovenian
+kn kannada · et estonian · mk macedonian · br breton · eu basque
+is icelandic · hy armenian · ne nepali · mn mongolian · bs bosnian
+kk kazakh · sq albanian · sw swahili · gl galician · mr marathi · pa punjabi
+si sinhala · km khmer · sn shona · yo yoruba · so somali · af afrikaans
+oc occitan · ka georgian · be belarusian · tg tajik · sd sindhi · gu gujarati
+am amharic · yi yiddish · lo lao · uz uzbek · fo faroese · ht haitian creole
+ps pashto · tk turkmen · nn nynorsk · mt maltese · sa sanskrit
+lb luxembourgish · my myanmar · bo tibetan · tl tagalog · mg malagasy
+as assamese · tt tatar · haw hawaiian · ln lingala · ha hausa · ba bashkir
+jw javanese · su sundanese
+
++ yue cantonese — Full only
+```
+
+</details>
 
 ## Building it yourself
 
