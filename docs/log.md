@@ -388,8 +388,11 @@ Note: macOS CI run 38767813523 went green (6m22s) after the deployment-target fi
   can also leave a stale `/Volumes/dmg.*` mount + `rw.*.dmg`; detach/remove and retry
   (fresh CI runners are unaffected). Exact model + SHA checks in `resources/` remain as
   the pre-bundle guard on Windows. Also: `tauri build` fails if `resources/*` matches
-  nothing (`glob pattern resources/* not found`) — keep one model in `resources/`
-  before compiling (CI always downloads one first; local devs: download one per README).
+  nothing (`glob pattern resources/* not found`). This bit the first v1.0.0 Windows run:
+  on a fresh checkout the folder is empty (models are gitignored) and the no-bundle
+  compile step runs before any model download. Fixed at the root with a committed
+  `src-tauri/resources/README.md` that keeps the glob satisfied; the per-SKU checks
+  still count only `*.bin`.
 
 ### Version 1.0.0 — first stable release
 
