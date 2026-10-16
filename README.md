@@ -20,20 +20,22 @@ Most apps that call themselves local still ask you to download a model before th
 
 ## Download
 
-The home of the app is **[lantip.space/lantipscript](https://lantip.space/lantipscript)**. Installers are also attached to the [Releases](../../releases) page.
+The home of the app is **[lantip.space/lantipscript](https://lantip.space/lantipscript)**. Direct downloads for v1.0.0 are below, and every file also lives on the [Releases](../../releases) page.
 
 All builds are the same app, and all of them are fully offline. The only difference is the listening model they carry, and how much of your download it costs.
 
-| Build | Choose it when | Speed | Download |
-| --- | --- | --- | --- |
-| **Full** | your computer is recent — an Apple silicon Mac, or a PC with a working GPU | best accuracy | 538 MB |
-| **Lite** | your computer is older, or you're not sure | fast, close to Full | 204 MB |
-| **Express** | the download needs to be small, or you want a rough first pass | fastest, least accurate | 56 MB |
+| Build | Choose it when | Speed | macOS (Apple silicon) | Windows (64-bit) |
+| --- | --- | --- | --- | --- |
+| **Full** | your computer is recent — an Apple silicon Mac, or a PC with a working GPU | best accuracy | [.dmg — 564 MB](https://github.com/sawungrana/lantipscript/releases/download/v1.0.0/lantipscript_full_mac_1.0.0_aarch64.dmg) | [.exe — 572 MB](https://github.com/sawungrana/lantipscript/releases/download/v1.0.0/lantipscript_full_windows_1.0.0_x64.exe) |
+| **Lite** | your computer is older, or you're not sure | fast, close to Full | [.dmg — 214 MB](https://github.com/sawungrana/lantipscript/releases/download/v1.0.0/lantipscript_lite_mac_1.0.0_aarch64.dmg) | [.exe — 237 MB](https://github.com/sawungrana/lantipscript/releases/download/v1.0.0/lantipscript_lite_windows_1.0.0_x64.exe) |
+| **Express** | the download needs to be small, or you want a rough first pass | fastest, least accurate | [.dmg — 58 MB](https://github.com/sawungrana/lantipscript/releases/download/v1.0.0/lantipscript_express_mac_1.0.0_aarch64.dmg) | [.exe — 85 MB](https://github.com/sawungrana/lantipscript/releases/download/v1.0.0/lantipscript_express_windows_1.0.0_x64.exe) |
 
-- **macOS** (Apple silicon): `lantipscript_1.0.0_aarch64_full.dmg` — or `lite`, or `express`
-- **Windows** (64-bit): `lantipscript_1.0.0_x64_full-setup.exe` — or `lite`, or `express`
+**Which file is mine?**
 
-If you'd rather not decide: Full if the machine is new, Lite if it isn't. The gear icon shows which build is running and whether it got GPU acceleration. Express carries the smallest model, so it mishears more, especially in Bahasa Indonesia — treat it as a draft, and let Lite or Full do the real transcript.
+- **macOS** — Apple silicon only ([M1 or newer](https://support.apple.com/en-us/116943); "About This Mac" will say "Apple M…"). Download the `.dmg`, open it, and drag LantipScript into Applications.
+- **Windows** — 64-bit Windows 10 or 11. Download the `.exe` and run it.
+
+If you'd rather not decide between Full, Lite, and Express: Full if the machine is new, Lite if it isn't. The gear icon shows which build is running and whether it got GPU acceleration. Express carries the smallest model, so it mishears more, especially in Bahasa Indonesia — treat it as a draft, and let Lite or Full do the real transcript.
 
 ## Using it
 
